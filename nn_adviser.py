@@ -11,12 +11,15 @@ class Value(Enum):
 # Data class to store state of a fact
 class Fact():
     
-    def __init__(self, text, val=Value.unknown):
+    def __init__(self, text, val=Value.unknown, req=True):
         
         self.text = text
         self.propagated = False
         self.value = val
-        
+    
+    def hasSameText(self, text):
+        return self.text == text
+    
     def __repr__(self):
         return self.text + " = " + str(self.value.value)
         
@@ -51,12 +54,20 @@ class Rule():
         return "Rule n°" + str(self.number) + ": " + str(self.pre) + " => " + str(self.post)
 
     
-# Expert trying to get as much information as possible given rules and facts
+# Expert trying to advise you in your creation of a classification model
 class Expert():
 
-    def __init__(self, verb = True):
+    def __init__(self, verb = True, req={}, recaps={}):
+        self.requestable_facts = req
+        self.recaps = recaps
+        self.informational = ['binary', 'multiclass', 'nn', 'ml']
+        self.advisable = ['mlp-softmax', 'mlp-sigmoid', 'softmax-regression', 'logistic-regression']
+
         self.facts=[]
         self.rules=[]
+        self._facts=[]
+        self._rules=[]
+        
         self.verb = verb
 
     def addRule(self,r):
@@ -74,6 +85,9 @@ class Expert():
     def rectractFact(self,f):
         if self.verb: print(f"Removing fact {f.text}")
         self.facts.remove(f)
+        
+    def Requestable(self, fact):
+        return fact.text in self.requestable_facts.keys()
 
     # Returns the list of rules that contains this fact as a pre
     def _getRulesForFactPre(self, fact):
@@ -88,8 +102,11 @@ class Expert():
         
         choice = None
         while choice not in [1, 2, 3]:
-            choice = int(input("Is " + f.text + " true(1), false(2) or unknown(3): "))
-            
+            question_text = self.requestable_facts[f.text]
+            choice = int(input(question_text + " true(1), false(2) or unknown(3): "))
+         
+        del self.requestable_facts[f.text]
+        
         if choice == 1:
             f.value = Value.true
             self.addFact(f)
@@ -97,20 +114,23 @@ class Expert():
         
         elif choice == 2:
             f.value = Value.false
+            self.addFact(f)
             return False
         
         else:
             f.value = Value.unknown
+            self.addFact(f)
             return False
            
     # Backward chaining with questions
     def BackwardChaining(self, fact):
         
+        if self.verb: print(f"Backwarding on {fact.text}...")
+        
         already_tried = []
         
         for rule in self._getRulesForFactPost(fact):
             for pre in rule.pre:
-                
                 # Avoid to loop on some facts
                 if pre not in already_tried:
                     already_tried.append(pre)
@@ -118,74 +138,165 @@ class Expert():
                     
             if ret: return True
         
-        return self._ask(fact)
+        if self.Requestable(fact):
+            return self._ask(fact)
+        
+        return False
         
     
     # Forward chaining with fact propagation
     def ForwardChaining(self, facts):
         
-        #self.facts = facts
+        if self.verb: print(f"Forwarding on {facts}")
         
         for f in facts:
             self.Propagate(f)
             f.propagated = True
             
+            
     
     # Propagates 1 fact through the rules concerned
     def Propagate(self, fact):
+        
+        if fact.propagated: return
+        
+        if self.verb: print(f"Propagating on {fact}")
+
         new_facts = []
         
         for rule in self._getRulesForFactPre(fact):
-            rule.removeAtom(fact.text)
             
-            if rule.isEmpty():
-                self.removeRule(rule)
+            if fact.value == Value.false:
                 
-                # Disjunction of new_facts and conclusions(r)
-                new_facts = list(set(new_facts + [Fact(r, val=Value.true) for r in rule.post]))
+                self.removeRule(rule)
+                new_facts = list(set(new_facts + [Fact(r, val=Value.false) for r in rule.post]))
+                    
+            elif fact.value == Value.true:
+                rule.removeAtom(fact.text)
+            
+                if rule.isEmpty():
+                    self.removeRule(rule)
+                
+                    # Disjunction of new_facts and conclusions(r)
+                    new_facts = list(set(new_facts + [Fact(r, val=Value.true) for r in rule.post]))
+            
+            else:
+                new_facts = list(set(new_facts + [Fact(r, val=Value.unknown) for r in rule.post]))
         
         # Add new facts to our facts data structure
         self.facts = list(set(self.facts + new_facts))
         
+        
         # Propagate new facts found
         for f in new_facts:
             self.Propagate(f)
+            f.propagated = True
             
     
-    def Proceed(self, facts):
+    def Proceed(self, facts=[]):
         
         if self.verb: print(f"Base facts are : {facts}")
-        if self.verb: print("Forwarding...")
         
-        self.fact = facts
+        self.facts = facts
         self.ForwardChaining(facts)
         
-        if self.rules:
+        while self.rules:
             for rule in self.rules:
                 for p in rule.post:
-                    if self.verb: print(f"Backwarding on {p}...")
-                    ret = self.BackwardChaining(Fact(p))
-                    
-                    if ret:
+                            
+                    if not any([f.hasSameText(p) for f in self.facts]):
+                        ret = self.BackwardChaining(Fact(p))
                         self.ForwardChaining([fact for fact in self.facts if not fact.propagated])
                             
         self.Recap()
         
                             
     def Recap(self):
-        print(f"Facts: {self.facts}")
+        info = ""
+        adv = ""
+        for f in self.facts:
+            if f.text in self.recaps.keys() and f.value == Value.true:
+                
+                if f.text in self.informational:
+                    info += self.recaps[f.text] + '\n'
+                else:
+                    adv += self.recaps[f.text] + '\n'
+        
+        ret = "You said that:\n" + info + "From these informations:\n" + adv
+        
+        if ret == "" or info == "" or adv == "":
+            ret = "I can't advise you anything with the information you gave to me :("
+                
+                
+        print(ret)
+                
 
         
-expert = Expert()
+        
+requestable_dict = {
+    'binary': 'Is your problem a binary classification one?', 
+    'multiclass': 'Is your problem a multiclass problem of more than 2 classes?', 
+    'nn': 'Do you plan to use a neural network?', 
+    'ml': 'Do you plan to use machine learning algorithms?'
+}
 
-expert.addRule(Rule("promesses-irréalistes => démagogie"))
-expert.addRule(Rule("attaques-personnelles => démagogie"))
-expert.addRule(Rule("démagogie & casseroles & contrôle-média => gagne-élection"))
-expert.addRule(Rule("pas-casseroles & déjà-présenté => gagne-élection"))
-expert.addRule(Rule("démagogie & pas-casseroles => gagne-élection"))
-expert.addRule(Rule("a-déjà-perdu => déjà-présenté"))
-expert.addRule(Rule("patron-chaine => contrôle-média"))
-expert.addRule(Rule("mari-patronne => contrôle-média"))
 
-BF = [Fact("attaques-personnelles", val=Value.true), Fact("patron-chaine", val=Value.true), Fact("casseroles", val=Value.true)]
-expert.Proceed(BF)
+fact_recaps = {
+    
+    'binary': '- You need to classify data between 2 classes.', 
+    'multiclass': '- You need to classify data between 2 classes.', 
+    'nn': '- You want to use a neural network.', 
+    'ml': '- You want to use basic machine learning algorithms.',
+    'mlp-softmax': '- I advise you to use a multilayer perceptron with a softmax activation on the output layer.',
+    'mlp-sigmoid': '- I advise you to use a multilayer perceptron with a sigmoid activation on the output layer.',
+    'softmax-regression': '- I advise you to use a softmax regression algorithm.',
+    'logistic-regression': '- I advise you to use a logistic regression alogrithm.'
+}
+
+
+
+NNexpert = Expert(req=requestable_dict, recaps=fact_recaps, verb=False)
+
+NNexpert.addRule((Rule("classification => classifier")))
+NNexpert.addRule((Rule("classifier & binary => binary-classification")))
+NNexpert.addRule((Rule("classifier & multiclass => multi-classification")))
+
+NNexpert.addRule((Rule("multi-classification & nn => mlp-softmax")))
+NNexpert.addRule((Rule("binary-classification & nn => mlp-sigmoid")))
+
+NNexpert.addRule((Rule("multi-classification & ml => softmax-regression")))
+NNexpert.addRule((Rule("binary-classification & ml => logistic-regression")))
+
+
+BF = [Fact("classification", val=Value.true)]
+NNexpert.Proceed(BF)
+
+
+'''
+# Purpose 
+NNexpert.addRule((Rule("create-data => generative-model")))
+NNexpert.addRule((Rule("analyze-data => classic-model")))
+
+# Problem type
+NNexpert.addRule((Rule("labelled-data => supervised")))
+NNexpert.addRule((Rule("raw-data => unsupervised")))
+
+# Classification problems
+NNexpert.addRule((Rule("classic-model & multiclass => classifier")))
+NNexpert.addRule((Rule("classifier & supervised => softmax-regression")))
+NNexpert.addRule((Rule("classifier & unsupervised => kmeans")))
+
+# Prediction problems
+NNexpert.addRule((Rule("classic-model & prediction => estimator")))
+NNexpert.addRule((Rule("temporal-data & supervised & estimator => time-series")))
+NNexpert.addRule((Rule("linear-data & estimator => linear-regression")))
+NNexpert.addRule((Rule("partially-linear-data & estimator => ensemble-learning")))
+NNexpert.addRule((Rule("non-linear-data & estimator => random-forest & neural-network")))
+'''
+'''
+NNexpert.addRule((Rule("image => convolution")))
+
+NNexpert.addRule((Rule("text => ...")))
+NNexpert.addRule((Rule("unbalanced-data & data-fixed => metrics-study")))
+NNexpert.addRule((Rule("unbalanced-data & data-not-fixed => re-sampling")))
+'''
